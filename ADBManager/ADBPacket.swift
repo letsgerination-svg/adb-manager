@@ -46,6 +46,7 @@ struct ADBPacket {
 
 enum ADBCommand {
     static let CNXN: UInt32 = 0x4E584E43
+    static let OPEN: UInt32 = 0x4E45504F
     static let AUTH: UInt32 = 0x48545541
     static let STLS: UInt32 = 0x534C5453
     static let OKAY: UInt32 = 0x59414B4F
