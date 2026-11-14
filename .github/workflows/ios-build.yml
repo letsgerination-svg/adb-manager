@@ -1,0 +1,23 @@
+name: iOS build
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build unsigned iOS app
+        run: |
+          xcodebuild -project ADBManager.xcodeproj -scheme ADBManager -configuration Release -sdk iphoneos -derivedDataPath build CODE_SIGNING_ALLOWED=NO
+          mkdir -p Payload
+          cp -R build/Build/Products/Release-iphoneos/ADBManager.app Payload/
+          zip -r ADBManager-unsigned.ipa Payload
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ADBManager-unsigned-ipa
+          path: ADBManager-unsigned.ipa
+          if-no-files-found: error
