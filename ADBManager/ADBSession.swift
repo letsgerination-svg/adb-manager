@@ -83,7 +83,7 @@ final class ADBSession: ObservableObject {
     }
 
     private func start(_ connection: NWConnection) async throws {
-        try await withCheckedThrowingContinuation { continuation in
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
             var completed = false
             connection.stateUpdateHandler = { state in
                 switch state {
@@ -104,7 +104,7 @@ final class ADBSession: ObservableObject {
     }
 
     private func send(_ data: Data, over connection: NWConnection) async throws {
-        try await withCheckedThrowingContinuation { continuation in
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
             connection.send(content: data, completion: .contentProcessed { error in
                 if let error { continuation.resume(throwing: error) }
                 else { continuation.resume() }
@@ -116,7 +116,7 @@ final class ADBSession: ObservableObject {
         var collected = Data()
         while collected.count < count {
             let remaining = count - collected.count
-            let chunk: Data = try await withCheckedThrowingContinuation { continuation in
+            let chunk: Data = try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Data, Error>) in
                 connection.receive(minimumIncompleteLength: remaining, maximumLength: remaining) { data, _, isComplete, error in
                     if let error { continuation.resume(throwing: error); return }
                     if let data, !data.isEmpty {
