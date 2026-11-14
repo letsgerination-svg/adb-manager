@@ -10,12 +10,15 @@ final class ADBSession: ObservableObject {
     @Published private(set) var output = ""
 
     private var connection: NWConnection?
+    private var nextLocalID: UInt32 = 1
 
     func connect(host: String, port: UInt16) async {
-        guard let nwPort = NWEndpoint.Port(rawValue: port) else {
-            status = "Некорректный порт"
+        guard !host.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              let nwPort = NWEndpoint.Port(rawValue: port) else {
+            status = "Проверьте IP-адрес и порт"
             return
         }
+
         disconnect()
         isBusy = true
         defer { isBusy = false }
@@ -32,32 +35,28 @@ final class ADBSession: ObservableObject {
                                   arg0: 0x01000001,
                                   arg1: 256 * 1024,
                                   payload: banner)
-            try await send(hello.encoded, over: candidate)
+            try await send(hello, over: candidate)
 
-            let header = try await receiveExactly(ADBPacket.headerSize, from: candidate)
-            let payloadLength = Int(header[12..<16].withUnsafeBytes {
-                $0.loadUnaligned(as: UInt32.self).littleEndian
-            })
-            guard payloadLength <= ADBPacket.maximumPayload else {
-                throw ADBPacketError.payloadTooLarge
-            }
-            let payload = payloadLength == 0 ? Data() : try await receiveExactly(payloadLength, from: candidate)
-            let response = try ADBPacket.decode(header: header, payload: payload)
-
+            let response = try await receivePacket(from: candidate)
             switch response.command {
             case ADBCommand.AUTH:
-                status = "Android запросил ADB AUTH. Следующий этап — RSA-ключ и подтверждение на Android."
-                output = "Получен пакет AUTH (тип \(response.arg0)).\nТранспорт ADB отвечает. Авторизация ещё не завершена."
+                isConnected = false
+                status = "Нужна ADB RSA-авторизация. Подключение пока не завершено."
+                output = "Android запросил AUTH (тип \(response.arg0)). RSA-подпись ещё не реализована."
+                candidate.cancel()
+                connection = nil
             case ADBCommand.CNXN:
-                status = "ADB CNXN принят. Проверяем возможности соединения."
-                output = String(data: response.payload, encoding: .utf8) ?? "Получен ответ CNXN."
                 isConnected = true
+                status = "ADB-транспорт подключён"
+                output = String(data: response.payload, encoding: .utf8) ?? "Получен ответ CNXN."
             case ADBCommand.FAIL:
-                status = "Android отклонил ADB-соединение."
+                isConnected = false
+                status = "Android отклонил ADB-соединение"
                 output = String(data: response.payload, encoding: .utf8) ?? "ADB FAIL"
+                candidate.cancel()
+                connection = nil
             default:
-                status = "Получен неожиданный пакет ADB: 0x" + String(response.command, radix: 16)
-                output = "Ответ получен, но рукопожатие не завершено."
+                throw ADBSessionError.unexpectedPacket(response.command)
             }
         } catch {
             status = "Ошибка ADB: \(error.localizedDescription)"
@@ -68,48 +67,120 @@ final class ADBSession: ObservableObject {
     }
 
     func run(command: String) async {
-        guard isConnected else {
-            output = "Нет авторизованного ADB-соединения. Сначала завершите RSA/TLS-аутентификацию."
+        guard isConnected, let connection else {
+            output = "Нет подключённого ADB-транспорта."
             return
         }
-        output = "ADB-транспорт установлен, но интерактивный shell ещё не реализован."
+        let trimmed = command.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            output = "Введите команду."
+            return
+        }
+
+        isBusy = true
+        status = "Выполняется команда…"
+        defer {
+            isBusy = false
+            if isConnected { status = "ADB-транспорт подключён" }
+        }
+
+        let localID = nextLocalID
+        nextLocalID &+= 1
+        let open = ADBPacket(command: ADBCommand.OPEN,
+                             arg0: localID,
+                             arg1: 0,
+                             payload: Data(("shell:" + trimmed + "\0").utf8))
+
+        do {
+            try await send(open, over: connection)
+            var remoteID: UInt32?
+            var result = Data()
+            let maxOutput = 1024 * 1024
+
+            while true {
+                let packet = try await receivePacket(from: connection)
+                switch packet.command {
+                case ADBCommand.OKAY:
+                    guard packet.arg1 == localID else { continue }
+                    remoteID = packet.arg0
+                case ADBCommand.WRTE:
+                    guard let remoteID, packet.arg0 == remoteID, packet.arg1 == localID else {
+                        throw ADBSessionError.invalidStream
+                    }
+                    if result.count + packet.payload.count > maxOutput {
+                        throw ADBSessionError.outputTooLarge
+                    }
+                    result.append(packet.payload)
+                    try await send(ADBPacket(command: ADBCommand.OKAY,
+                                              arg0: localID,
+                                              arg1: remoteID,
+                                              payload: Data()), over: connection)
+                case ADBCommand.CLSE:
+                    let peerID = packet.arg0
+                    try await send(ADBPacket(command: ADBCommand.CLSE,
+                                              arg0: localID,
+                                              arg1: peerID,
+                                              payload: Data()), over: connection)
+                    output = String(data: result, encoding: .utf8) ?? result.map { String(format: "%02x", $0) }.joined()
+                    return
+                case ADBCommand.FAIL:
+                    throw ADBSessionError.deviceFailure(String(data: packet.payload, encoding: .utf8) ?? "ADB FAIL")
+                default:
+                    throw ADBSessionError.unexpectedPacket(packet.command)
+                }
+            }
+        } catch {
+            output = "Ошибка выполнения команды: \(error.localizedDescription)"
+        }
     }
 
     func disconnect() {
         connection?.cancel()
         connection = nil
         isConnected = false
+        isBusy = false
         status = "Не подключено"
+        output = ""
     }
 
     private func start(_ connection: NWConnection) async throws {
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-            var completed = false
+            let gate = ContinuationGate()
             connection.stateUpdateHandler = { state in
                 switch state {
-                case .ready where !completed:
-                    completed = true
-                    continuation.resume()
-                case .failed(let error) where !completed:
-                    completed = true
-                    continuation.resume(throwing: error)
-                case .cancelled where !completed:
-                    completed = true
-                    continuation.resume(throwing: NWError.posix(.ECANCELED))
-                default: break
+                case .ready:
+                    if gate.claim() { continuation.resume() }
+                case .failed(let error):
+                    if gate.claim() { continuation.resume(throwing: error) }
+                case .cancelled:
+                    if gate.claim() { continuation.resume(throwing: NWError.posix(.ECANCELED)) }
+                default:
+                    break
                 }
             }
             connection.start(queue: .global(qos: .userInitiated))
         }
     }
 
-    private func send(_ data: Data, over connection: NWConnection) async throws {
+    private func send(_ packet: ADBPacket, over connection: NWConnection) async throws {
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-            connection.send(content: data, completion: .contentProcessed { error in
+            connection.send(content: packet.encoded, completion: .contentProcessed { error in
                 if let error { continuation.resume(throwing: error) }
                 else { continuation.resume() }
             })
         }
+    }
+
+    private func receivePacket(from connection: NWConnection) async throws -> ADBPacket {
+        let header = try await receiveExactly(ADBPacket.headerSize, from: connection)
+        let payloadLength = header[12..<16].withUnsafeBytes {
+            Int($0.loadUnaligned(as: UInt32.self).littleEndian)
+        }
+        guard payloadLength <= ADBPacket.maximumPayload else {
+            throw ADBPacketError.payloadTooLarge
+        }
+        let payload = payloadLength == 0 ? Data() : try await receiveExactly(payloadLength, from: connection)
+        return try ADBPacket.decode(header: header, payload: payload)
     }
 
     private func receiveExactly(_ count: Int, from connection: NWConnection) async throws -> Data {
@@ -117,9 +188,10 @@ final class ADBSession: ObservableObject {
         while collected.count < count {
             let remaining = count - collected.count
             let chunk: Data = try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Data, Error>) in
-                connection.receive(minimumIncompleteLength: remaining, maximumLength: remaining) { data, _, isComplete, error in
-                    if let error { continuation.resume(throwing: error); return }
-                    if let data, !data.isEmpty {
+                connection.receive(minimumIncompleteLength: 1, maximumLength: remaining) { data, _, isComplete, error in
+                    if let error {
+                        continuation.resume(throwing: error)
+                    } else if let data, !data.isEmpty {
                         continuation.resume(returning: data)
                     } else if isComplete {
                         continuation.resume(throwing: NWError.posix(.ECONNRESET))
@@ -131,5 +203,38 @@ final class ADBSession: ObservableObject {
             collected.append(chunk)
         }
         return collected
+    }
+}
+
+private final class ContinuationGate: @unchecked Sendable {
+    private let lock = NSLock()
+    private var completed = false
+
+    func claim() -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        guard !completed else { return false }
+        completed = true
+        return true
+    }
+}
+
+private enum ADBSessionError: LocalizedError {
+    case unexpectedPacket(UInt32)
+    case invalidStream
+    case outputTooLarge
+    case deviceFailure(String)
+
+    var errorDescription: String? {
+        switch self {
+        case .unexpectedPacket(let command):
+            return "Неожиданный пакет ADB: 0x" + String(command, radix: 16)
+        case .invalidStream:
+            return "Неверные идентификаторы ADB-потока."
+        case .outputTooLarge:
+            return "Вывод команды превысил 1 МБ."
+        case .deviceFailure(let message):
+            return message
+        }
     }
 }
