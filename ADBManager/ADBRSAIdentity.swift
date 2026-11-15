@@ -39,8 +39,12 @@ final class ADBRSAIdentity {
 
         var item: CFTypeRef?
         let status = SecItemCopyMatching(query as CFDictionary, &item)
-        if status == errSecSuccess, let existingKey = item as? SecKey {
-            privateKey = existingKey
+        if status == errSecSuccess {
+            guard let existingKey = item,
+                  CFGetTypeID(existingKey) == SecKeyGetTypeID() else {
+                throw ADBRSAError.keychainLookup(errSecDecode)
+            }
+            privateKey = unsafeBitCast(existingKey, to: SecKey.self)
             return
         }
         guard status == errSecItemNotFound else {
@@ -90,11 +94,15 @@ final class ADBRSAIdentity {
         }
 
         let modulusLE = Array(modulus.reversed())
-        let words = stride(from: 0, to: 256, by: 4).map { offset -> UInt32 in
-            UInt32(modulusLE[offset]) |
-            (UInt32(modulusLE[offset + 1]) << 8) |
-            (UInt32(modulusLE[offset + 2]) << 16) |
-            (UInt32(modulusLE[offset + 3]) << 24)
+        var words = [UInt32]()
+        words.reserveCapacity(64)
+        for offset in stride(from: 0, to: 256, by: 4) {
+            let byte0 = UInt32(modulusLE[offset])
+            let byte1 = UInt32(modulusLE[offset + 1])
+            let byte2 = UInt32(modulusLE[offset + 2])
+            let byte3 = UInt32(modulusLE[offset + 3])
+            let word = byte0 | (byte1 << 8) | (byte2 << 16) | (byte3 << 24)
+            words.append(word)
         }
         guard words.count == 64, words[63] & 0x8000_0000 != 0 else {
             throw ADBRSAError.invalidModulus
