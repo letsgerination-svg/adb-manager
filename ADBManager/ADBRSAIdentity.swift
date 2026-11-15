@@ -143,16 +143,16 @@ final class ADBRSAIdentity {
 
     private static func parsePKCS1PublicKey(_ der: Data) throws -> (Data, UInt64) {
         var cursor = 0
-        guard readByte(der, &cursor) == 0x30 else { throw ADBRSAError.invalidPublicKey }
+        guard let sequenceTag = readByte(der, &cursor), sequenceTag == 0x30 else { throw ADBRSAError.invalidPublicKey }
         _ = try readLength(der, &cursor)
-        guard readByte(der, &cursor) == 0x02 else { throw ADBRSAError.invalidPublicKey }
+        guard let modulusTag = readByte(der, &cursor), modulusTag == 0x02 else { throw ADBRSAError.invalidPublicKey }
         let modulusLength = try readLength(der, &cursor)
         guard cursor + modulusLength <= der.count else { throw ADBRSAError.invalidPublicKey }
         var modulus = Data(der[cursor..<(cursor + modulusLength)])
         cursor += modulusLength
         while modulus.first == 0 { modulus.removeFirst() }
 
-        guard readByte(der, &cursor) == 0x02 else { throw ADBRSAError.invalidPublicKey }
+        guard let exponentTag = readByte(der, &cursor), exponentTag == 0x02 else { throw ADBRSAError.invalidPublicKey }
         let exponentLength = try readLength(der, &cursor)
         guard exponentLength > 0, exponentLength <= 4, cursor + exponentLength <= der.count else {
             throw ADBRSAError.invalidPublicKey
