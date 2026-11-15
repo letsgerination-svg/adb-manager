@@ -14,6 +14,7 @@ final class ADBSession: ObservableObject {
     private var rsaIdentity: ADBRSAIdentity?
 
     func connect(host: String, port: UInt16) async {
+        guard !isBusy else { return }
         guard !host.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
               let nwPort = NWEndpoint.Port(rawValue: port) else {
             status = "Проверьте IP-адрес и порт"
@@ -89,6 +90,7 @@ final class ADBSession: ObservableObject {
     }
 
     func run(command: String) async {
+        guard !isBusy else { return }
         guard isConnected, let connection else {
             output = "Нет подключённого ADB-транспорта."
             return
@@ -218,11 +220,15 @@ final class ADBSession: ObservableObject {
                     } else if isComplete {
                         continuation.resume(throwing: NWError.posix(.ECONNRESET))
                     } else {
-                        continuation.resume(throwing: NWError.posix(.EWOULDBLOCK))
+                        // Network.framework may deliver an empty, non-final callback.
+                        // Keep waiting instead of treating it as a fatal EWOULDBLOCK.
+                        continuation.resume(returning: Data())
                     }
                 }
             }
-            collected.append(chunk)
+            if !chunk.isEmpty {
+                collected.append(chunk)
+            }
         }
         return collected
     }
