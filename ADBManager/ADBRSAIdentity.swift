@@ -8,6 +8,7 @@ enum ADBRSAError: LocalizedError {
     case signingFailed(CFError?)
     case invalidModulus
     case invalidToken
+    case keychainLookup(OSStatus)
 
     var errorDescription: String? {
         switch self {
@@ -17,6 +18,7 @@ enum ADBRSAError: LocalizedError {
         case .signingFailed: return "Не удалось подписать ADB AUTH token."
         case .invalidModulus: return "Неверный RSA-модуль."
         case .invalidToken: return "ADB AUTH token должен содержать 20 байт."
+        case .keychainLookup(let status): return "Ошибка чтения ADB-ключа из Keychain: \(status)."
         }
     }
 }
@@ -40,6 +42,9 @@ final class ADBRSAIdentity {
         if status == errSecSuccess, let existingKey = item as? SecKey {
             privateKey = existingKey
             return
+        }
+        guard status == errSecItemNotFound else {
+            throw ADBRSAError.keychainLookup(status)
         }
 
         let attributes: [String: Any] = [
@@ -79,7 +84,8 @@ final class ADBRSAIdentity {
         }
 
         let (modulus, exponent) = try Self.parsePKCS1PublicKey(external)
-        guard modulus.count == 256, exponent <= UInt32.max else {
+        guard modulus.count == 256, exponent >= 3, exponent <= UInt32.max,
+              exponent & 1 == 1, modulus.last! & 1 == 1 else {
             throw ADBRSAError.invalidPublicKey
         }
 
@@ -148,7 +154,9 @@ final class ADBRSAIdentity {
     private static func parsePKCS1PublicKey(_ der: Data) throws -> (Data, UInt64) {
         var cursor = 0
         guard let sequenceTag = readByte(der, &cursor), sequenceTag == 0x30 else { throw ADBRSAError.invalidPublicKey }
-        _ = try readLength(der, &cursor)
+        let sequenceLength = try readLength(der, &cursor)
+        let sequenceEnd = cursor + sequenceLength
+        guard sequenceEnd <= der.count else { throw ADBRSAError.invalidPublicKey }
         guard let modulusTag = readByte(der, &cursor), modulusTag == 0x02 else { throw ADBRSAError.invalidPublicKey }
         let modulusLength = try readLength(der, &cursor)
         guard cursor + modulusLength <= der.count else { throw ADBRSAError.invalidPublicKey }
@@ -165,7 +173,9 @@ final class ADBRSAIdentity {
         for byte in der[cursor..<(cursor + exponentLength)] {
             exponent = (exponent << 8) | UInt64(byte)
         }
-        guard modulus.count == 256 else { throw ADBRSAError.invalidPublicKey }
+        guard modulus.count == 256, cursor + exponentLength == sequenceEnd else {
+            throw ADBRSAError.invalidPublicKey
+        }
         return (modulus, exponent)
     }
 
