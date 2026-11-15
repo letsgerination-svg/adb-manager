@@ -11,6 +11,7 @@ final class ADBSession: ObservableObject {
 
     private var connection: NWConnection?
     private var nextLocalID: UInt32 = 1
+    private var rsaIdentity: ADBRSAIdentity?
 
     func connect(host: String, port: UInt16) async {
         guard !host.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
@@ -37,28 +38,48 @@ final class ADBSession: ObservableObject {
                                   payload: banner)
             try await send(hello, over: candidate)
 
-            let response = try await receivePacket(from: candidate)
-            switch response.command {
-            case ADBCommand.AUTH:
-                isConnected = false
-                status = "Нужна ADB RSA-авторизация. Подключение пока не завершено."
-                output = "Android запросил AUTH (тип \(response.arg0)). RSA-подпись ещё не реализована."
-                candidate.cancel()
-                connection = nil
-            case ADBCommand.CNXN:
-                isConnected = true
-                status = "ADB-транспорт подключён"
-                output = String(data: response.payload, encoding: .utf8) ?? "Получен ответ CNXN."
-            case ADBCommand.FAIL:
-                isConnected = false
-                status = "Android отклонил ADB-соединение"
-                output = String(data: response.payload, encoding: .utf8) ?? "ADB FAIL"
-                candidate.cancel()
-                connection = nil
-            default:
-                throw ADBSessionError.unexpectedPacket(response.command)
-            }
-        } catch {
+            var didSendSignature = false
+            var didSendPublicKey = false
+            while true {
+                let response = try await receivePacket(from: candidate)
+                switch response.command {
+                case ADBCommand.AUTH:
+                    guard let identity = try? ADBRSAIdentity() else {
+                        throw ADBSessionError.authenticationUnavailable
+                    }
+                    rsaIdentity = identity
+                    if response.arg0 == 1 && !didSendSignature {
+                        let signature = try identity.sign(token: response.payload)
+                        try await send(ADBPacket(command: ADBCommand.AUTH, arg0: 2, arg1: 0, payload: signature), over: candidate)
+                        didSendSignature = true
+                        status = "Отправлена RSA-подпись. Ожидаю ответ Android…"
+                        continue
+                    }
+                    if response.arg0 == 1 && didSendSignature && !didSendPublicKey {
+                        let publicKey = Data(try identity.adbPublicKeyString().utf8)
+                        try await send(ADBPacket(command: ADBCommand.AUTH, arg0: 3, arg1: 0, payload: publicKey), over: candidate)
+                        didSendPublicKey = true
+                        status = "Открытый RSA-ключ отправлен. Подтвердите запрос на Android."
+                        output = "На Android должно появиться окно разрешения отладки. Разрешите подключение."
+                        continue
+                    }
+                    throw ADBSessionError.authenticationRejected
+                case ADBCommand.CNXN:
+                    isConnected = true
+                    status = "ADB-транспорт подключён"
+                    output = String(data: response.payload, encoding: .utf8) ?? "Получен ответ CNXN."
+                    return
+                case ADBCommand.FAIL:
+                    isConnected = false
+                    status = "Android отклонил ADB-соединение"
+                    output = String(data: response.payload, encoding: .utf8) ?? "ADB FAIL"
+                    candidate.cancel()
+                    connection = nil
+                    return
+                default:
+                    throw ADBSessionError.unexpectedPacket(response.command)
+                }
+            }        } catch {
             status = "Ошибка ADB: \(error.localizedDescription)"
             isConnected = false
             candidate.cancel()
@@ -224,6 +245,8 @@ private enum ADBSessionError: LocalizedError {
     case invalidStream
     case outputTooLarge
     case deviceFailure(String)
+    case authenticationUnavailable
+    case authenticationRejected
 
     var errorDescription: String? {
         switch self {
@@ -235,6 +258,10 @@ private enum ADBSessionError: LocalizedError {
             return "Вывод команды превысил 1 МБ."
         case .deviceFailure(let message):
             return message
+        case .authenticationUnavailable:
+            return "Не удалось подготовить RSA-ключ ADB."
+        case .authenticationRejected:
+            return "Android отклонил RSA-авторизацию или прислал неожиданный AUTH. Проверьте запрос на устройстве."
         }
     }
 }
