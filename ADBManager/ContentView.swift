@@ -8,6 +8,8 @@ struct ContentView: View {
     @State private var command = "getprop ro.build.version.release"
     @State private var isAPKPickerPresented = false
     @State private var packageName = ""
+    @State private var pendingPackageAction: PackageAction?
+    @State private var showPackageConfirmation = false
 
     var body: some View {
         NavigationStack {
@@ -106,7 +108,8 @@ struct ContentView: View {
                                 .autocorrectionDisabled()
                                 .fieldStyle()
                             Button {
-                                Task { await adb.managePackage(packageName, action: .uninstall) }
+                                pendingPackageAction = .uninstall
+                                showPackageConfirmation = true
                             } label: {
                                 Label("Удалить приложение", systemImage: "trash")
                                     .frame(maxWidth: .infinity)
@@ -114,7 +117,8 @@ struct ContentView: View {
                             .buttonStyle(SecondaryButtonStyle())
                             .disabled(!adb.isConnected || adb.isBusy || packageName.isEmpty)
                             Button {
-                                Task { await adb.managePackage(packageName, action: .disable) }
+                                pendingPackageAction = .disable
+                                showPackageConfirmation = true
                             } label: {
                                 Label("Отключить пакет", systemImage: "pause.circle")
                                     .frame(maxWidth: .infinity)
@@ -122,7 +126,8 @@ struct ContentView: View {
                             .buttonStyle(SecondaryButtonStyle())
                             .disabled(!adb.isConnected || adb.isBusy || packageName.isEmpty)
                             Button {
-                                Task { await adb.managePackage(packageName, action: .enable) }
+                                pendingPackageAction = .enable
+                                showPackageConfirmation = true
                             } label: {
                                 Label("Включить пакет", systemImage: "play.circle")
                                     .frame(maxWidth: .infinity)
@@ -171,6 +176,16 @@ struct ContentView: View {
                 }
             }
             .toolbar(.hidden, for: .navigationBar)
+            .confirmationDialog(packageConfirmationTitle, isPresented: $showPackageConfirmation, titleVisibility: .visible) {
+                Button(packageConfirmationButtonTitle, role: .destructive) {
+                    guard let action = pendingPackageAction else { return }
+                    Task { await adb.managePackage(packageName, action: action) }
+                    pendingPackageAction = nil
+                }
+                Button("Отмена", role: .cancel) { pendingPackageAction = nil }
+            } message: {
+                Text("Проверьте имя пакета: \\(packageName). Отключение системного пакета может нарушить работу Android.")
+            }
             .fileImporter(isPresented: $isAPKPickerPresented, allowedContentTypes: [.data], allowsMultipleSelection: false) { result in
                 switch result {
                 case .success(let urls):
@@ -180,6 +195,24 @@ struct ContentView: View {
                     Task { await adb.reportError("Не удалось открыть APK: \\(error.localizedDescription)") }
                 }
             }
+        }
+    }
+
+    private var packageConfirmationTitle: String {
+        switch pendingPackageAction {
+        case .uninstall: return "Удалить приложение?"
+        case .disable: return "Отключить пакет?"
+        case .enable: return "Включить пакет?"
+        case .none: return "Подтвердите действие"
+        }
+    }
+
+    private var packageConfirmationButtonTitle: String {
+        switch pendingPackageAction {
+        case .uninstall: return "Удалить"
+        case .disable: return "Отключить"
+        case .enable: return "Включить"
+        case .none: return "Продолжить"
         }
     }
 
