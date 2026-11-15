@@ -32,7 +32,7 @@ final class ADBSession: ObservableObject {
             try await start(candidate)
             status = "TCP-соединение установлено. Отправка ADB CNXN…"
 
-            let banner = Data("host::features=shell_v2,cmd,stat_v2,ls_v2\0".utf8)
+            let banner = Data("host::features=cmd,stat_v2,ls_v2\0".utf8)
             let hello = ADBPacket(command: ADBCommand.CNXN,
                                   arg0: 0x01000001,
                                   arg1: 256 * 1024,
