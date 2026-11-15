@@ -10,6 +10,10 @@ jobs:
     runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
+      - name: Test ADB packet codec
+        run: |
+          swiftc ADBManager/ADBPacket.swift Tests/ADBPacketSmokeTests.swift -o /tmp/adb-packet-tests
+          /tmp/adb-packet-tests
       - name: Build unsigned iOS app
         run: |
           xcodebuild -project ADBManager.xcodeproj -scheme ADBManager -configuration Release -sdk iphoneos -derivedDataPath build CODE_SIGNING_ALLOWED=NO
