@@ -158,6 +158,110 @@ final class ADBSession: ObservableObject {
         }
     }
 
+
+    func installAPK(from fileURL: URL) async {
+        guard !isBusy else { return }
+        guard isConnected, let connection else {
+            output = "Сначала подключите Android по ADB."
+            return
+        }
+
+        isBusy = true
+        status = "Подготовка APK…"
+        var didStartAccess = false
+        do {
+            didStartAccess = fileURL.startAccessingSecurityScopedResource()
+            defer {
+                if didStartAccess { fileURL.stopAccessingSecurityScopedResource() }
+            }
+
+            let attributes = try FileManager.default.attributesOfItem(atPath: fileURL.path)
+            let fileSize = (attributes[.size] as? NSNumber)?.intValue ?? 0
+            guard fileSize > 0 else { throw ADBInstallError.emptyFile }
+
+            let remotePath = "/data/local/tmp/adbmanager-install.apk"
+            let localID = nextLocalID
+            nextLocalID &+= 1
+            try await send(ADBPacket(command: ADBCommand.OPEN, arg0: localID, arg1: 0,
+                                     payload: Data("sync:\0".utf8)), over: connection)
+
+            var remoteID: UInt32?
+            while remoteID == nil {
+                let packet = try await receivePacket(from: connection)
+                guard packet.command == ADBCommand.OKAY, packet.arg1 == localID else {
+                    throw ADBInstallError.invalidStream
+                }
+                remoteID = packet.arg0
+            }
+
+            let peerID = remoteID!
+            let sendRequest = try ADBSync.sendRequest(path: remotePath)
+            try await sendSyncPayload(sendRequest, localID: localID, remoteID: peerID, over: connection)
+
+            let handle = try FileHandle(forReadingFrom: fileURL)
+            defer { try? handle.close() }
+            var transferred = 0
+            while let chunk = try handle.read(upToCount: ADBSync.maximumDataChunk), !chunk.isEmpty {
+                let request = try ADBSync.dataRequest(chunk)
+                try await sendSyncPayload(request, localID: localID, remoteID: peerID, over: connection)
+                transferred += chunk.count
+                status = "Передача APK: \(transferred / 1024) / \(max(fileSize / 1024, 1)) КБ"
+            }
+
+            let done = ADBSync.doneRequest(modifiedAt: UInt32(Date().timeIntervalSince1970))
+            try await sendSyncPayload(done, localID: localID, remoteID: peerID, over: connection)
+
+            var installResult: String?
+            while installResult == nil {
+                let packet = try await receivePacket(from: connection)
+                if packet.command == ADBCommand.OKAY, packet.arg1 == localID {
+                    continue
+                }
+                guard packet.command == ADBCommand.WRTE,
+                      packet.arg0 == peerID, packet.arg1 == localID else {
+                    if packet.command == ADBCommand.CLSE {
+                        throw ADBInstallError.streamClosed
+                    }
+                    throw ADBInstallError.invalidStream
+                }
+                try await send(ADBPacket(command: ADBCommand.OKAY, arg0: localID, arg1: peerID, payload: Data()), over: connection)
+                let response = try ADBSync.decodeResponse(packet.payload)
+                if response.id == "OKAY" {
+                    installResult = "APK передан на Android."
+                } else if response.id == "FAIL" {
+                    installResult = "Ошибка передачи: " + (String(data: response.payload, encoding: .utf8) ?? "неизвестная ошибка")
+                } else {
+                    throw ADBInstallError.invalidSyncResponse
+                }
+            }
+
+            try await send(ADBPacket(command: ADBCommand.CLSE, arg0: localID, arg1: peerID, payload: Data()), over: connection)
+            isBusy = false
+            status = "APK передан. Установка…"
+            output = installResult ?? "APK передан."
+            await run(command: "pm install -r \"\(remotePath)\"")
+        } catch {
+            isBusy = false
+            status = "Ошибка передачи APK"
+            output = error.localizedDescription
+        }
+    }
+
+    private func sendSyncPayload(_ payload: Data, localID: UInt32, remoteID: UInt32, over connection: NWConnection) async throws {
+        try await send(ADBPacket(command: ADBCommand.WRTE, arg0: localID, arg1: remoteID, payload: payload), over: connection)
+        while true {
+            let response = try await receivePacket(from: connection)
+            if response.command == ADBCommand.OKAY,
+               response.arg0 == remoteID, response.arg1 == localID {
+                return
+            }
+            if response.command == ADBCommand.FAIL {
+                throw ADBInstallError.deviceFailure(String(data: response.payload, encoding: .utf8) ?? "ADB FAIL")
+            }
+            throw ADBInstallError.invalidStream
+        }
+    }
+
     func disconnect() {
         connection?.cancel()
         connection = nil
@@ -244,6 +348,24 @@ private final class ContinuationGate: @unchecked Sendable {
         guard !completed else { return false }
         completed = true
         return true
+    }
+}
+
+private enum ADBInstallError: LocalizedError {
+    case emptyFile
+    case invalidStream
+    case streamClosed
+    case invalidSyncResponse
+    case deviceFailure(String)
+
+    var errorDescription: String? {
+        switch self {
+        case .emptyFile: return "Выбран пустой файл."
+        case .invalidStream: return "Нарушен протокол ADB SYNC."
+        case .streamClosed: return "Android закрыл поток передачи."
+        case .invalidSyncResponse: return "Android вернул неизвестный ответ SYNC."
+        case .deviceFailure(let message): return message
+        }
     }
 }
 
