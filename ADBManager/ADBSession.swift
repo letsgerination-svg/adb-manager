@@ -262,6 +262,10 @@ final class ADBSession: ObservableObject {
         }
     }
 
+    func reportError(_ message: String) {
+        output = message
+    }
+
     func disconnect() {
         connection?.cancel()
         connection = nil
