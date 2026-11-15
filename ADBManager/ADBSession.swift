@@ -265,7 +265,7 @@ final class ADBSession: ObservableObject {
 
     func managePackage(_ rawName: String, action: PackageAction) async {
         let name = rawName.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard name.range(of: #"^[A-Za-z0-9_]+(\\.[A-Za-z0-9_]+)+$"#, options: .regularExpression) != nil else {
+        guard name.range(of: #"^[A-Za-z0-9_]+(\.[A-Za-z0-9_]+)+$"#, options: .regularExpression) != nil else {
             output = "Неверное имя пакета. Пример: com.example.app"
             return
         }
