@@ -272,11 +272,11 @@ final class ADBSession: ObservableObject {
         let command: String
         switch action {
         case .uninstall:
-            command = "pm uninstall --user 0 \"\\(name)\""
+            command = "pm uninstall --user 0 \"\(name)\""
         case .disable:
-            command = "pm disable-user --user 0 \"\\(name)\""
+            command = "pm disable-user --user 0 \"\(name)\""
         case .enable:
-            command = "pm enable \"\\(name)\""
+            command = "pm enable \"\(name)\""
         }
         await run(command: command)
     }
