@@ -7,6 +7,7 @@ struct ContentView: View {
     @State private var port = "5555"
     @State private var command = "getprop ro.build.version.release"
     @State private var isAPKPickerPresented = false
+    @State private var packageName = ""
 
     var body: some View {
         NavigationStack {
@@ -99,6 +100,40 @@ struct ContentView: View {
                                 .foregroundStyle(.white.opacity(0.55))
                         }
 
+                        panel(title: "Управление пакетами") {
+                            TextField("Имя пакета, например com.example.app", text: $packageName)
+                                .textInputAutocapitalization(.never)
+                                .autocorrectionDisabled()
+                                .fieldStyle()
+                            Button {
+                                Task { await adb.managePackage(packageName, action: .uninstall) }
+                            } label: {
+                                Label("Удалить приложение", systemImage: "trash")
+                                    .frame(maxWidth: .infinity)
+                            }
+                            .buttonStyle(SecondaryButtonStyle())
+                            .disabled(!adb.isConnected || adb.isBusy || packageName.isEmpty)
+                            Button {
+                                Task { await adb.managePackage(packageName, action: .disable) }
+                            } label: {
+                                Label("Отключить пакет", systemImage: "pause.circle")
+                                    .frame(maxWidth: .infinity)
+                            }
+                            .buttonStyle(SecondaryButtonStyle())
+                            .disabled(!adb.isConnected || adb.isBusy || packageName.isEmpty)
+                            Button {
+                                Task { await adb.managePackage(packageName, action: .enable) }
+                            } label: {
+                                Label("Включить пакет", systemImage: "play.circle")
+                                    .frame(maxWidth: .infinity)
+                            }
+                            .buttonStyle(SecondaryButtonStyle())
+                            .disabled(!adb.isConnected || adb.isBusy || packageName.isEmpty)
+                            Text("Перед отключением системных пакетов убедитесь, что знаете их назначение.")
+                                .font(.caption)
+                                .foregroundStyle(.white.opacity(0.55))
+                        }
+
                         panel(title: "ADB-терминал") {
                             Text("Вводите shell-команду без префикса «shell:».")
                                 .font(.caption)
@@ -127,7 +162,7 @@ struct ContentView: View {
                             .background(.black.opacity(0.35), in: RoundedRectangle(cornerRadius: 12))
                         }
 
-                        Text("Установка APK и управление состоянием пакетов пока не реализованы.")
+                        Text("ADB Manager · управление Android по локальной сети.")
                             .font(.caption)
                             .foregroundStyle(.white.opacity(0.45))
                             .padding(.horizontal, 4)
