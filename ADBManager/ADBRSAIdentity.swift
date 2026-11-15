@@ -7,6 +7,7 @@ enum ADBRSAError: LocalizedError {
     case invalidPublicKey
     case signingFailed(CFError?)
     case invalidModulus
+    case invalidToken
 
     var errorDescription: String? {
         switch self {
@@ -15,6 +16,7 @@ enum ADBRSAError: LocalizedError {
         case .invalidPublicKey: return "Неверный формат RSA-открытого ключа."
         case .signingFailed: return "Не удалось подписать ADB AUTH token."
         case .invalidModulus: return "Неверный RSA-модуль."
+        case .invalidToken: return "ADB AUTH token должен содержать 20 байт."
         }
     }
 }
@@ -29,13 +31,14 @@ final class ADBRSAIdentity {
             kSecClass as String: kSecClassKey,
             kSecAttrApplicationTag as String: tag,
             kSecAttrKeyType as String: kSecAttrKeyTypeRSA,
+            kSecAttrKeyClass as String: kSecAttrKeyClassPrivate,
             kSecReturnRef as String: true
         ]
 
         var item: CFTypeRef?
         let status = SecItemCopyMatching(query as CFDictionary, &item)
-        if status == errSecSuccess, let key = item as! SecKey? {
-            privateKey = key
+        if status == errSecSuccess, let existingKey = item as? SecKey {
+            privateKey = existingKey
             return
         }
 
@@ -56,6 +59,7 @@ final class ADBRSAIdentity {
     }
 
     func sign(token: Data) throws -> Data {
+        guard token.count == 20 else { throw ADBRSAError.invalidToken }
         var error: Unmanaged<CFError>?
         guard let signature = SecKeyCreateSignature(
             privateKey,
