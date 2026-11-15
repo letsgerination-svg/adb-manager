@@ -262,6 +262,25 @@ final class ADBSession: ObservableObject {
         }
     }
 
+
+    func managePackage(_ rawName: String, action: PackageAction) async {
+        let name = rawName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard name.range(of: #"^[A-Za-z0-9_]+(\\.[A-Za-z0-9_]+)+$"#, options: .regularExpression) != nil else {
+            output = "Неверное имя пакета. Пример: com.example.app"
+            return
+        }
+        let command: String
+        switch action {
+        case .uninstall:
+            command = "pm uninstall --user 0 \"\\(name)\""
+        case .disable:
+            command = "pm disable-user --user 0 \"\\(name)\""
+        case .enable:
+            command = "pm enable \"\\(name)\""
+        }
+        await run(command: command)
+    }
+
     func reportError(_ message: String) {
         output = message
     }
@@ -397,4 +416,11 @@ private enum ADBSessionError: LocalizedError {
             return "Android отклонил RSA-авторизацию или прислал неожиданный AUTH. Проверьте запрос на устройстве."
         }
     }
+}
+
+
+enum PackageAction {
+    case uninstall
+    case disable
+    case enable
 }
