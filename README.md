@@ -18,6 +18,10 @@ Native SwiftUI iOS app for managing Android devices over a local network.
 - End-to-end testing against a physical Android device.
 - Verified successful Xcode build and signed IPA.
 
+## Android 11+ implementation notes
+
+The exact pairing and TLS transport requirements are documented in [docs/WIRELESS_DEBUGGING.md](docs/WIRELESS_DEBUGGING.md). This is a protocol plan only; no Android 11+ pairing code is implemented yet.
+
 ## Protocol compatibility
 The current connection flow targets legacy ADB-over-TCP, typically port 5555, when that mode is explicitly enabled on the Android device. Android 11+ Wireless debugging normally uses a separate TLS pairing flow and is not supported yet. A successful TCP connection alone does not mean ADB is authenticated.
 
