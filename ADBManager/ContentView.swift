@@ -142,15 +142,10 @@ struct ContentView: View {
                     guard let url = urls.first else { return }
                     Task { await adb.installAPK(from: url) }
                 case .failure(let error):
-                    adbOutputError(error)
+                    Task { await adb.reportError("Не удалось открыть APK: \\(error.localizedDescription)") }
                 }
             }
         }
-    }
-
-    private func adbOutputError(_ error: Error) {
-        // The picker error is shown in the session output without changing connection state.
-        print("APK picker error: \\(error.localizedDescription)")
     }
 
     private func panel<Content: View>(title: String, @ViewBuilder content: () -> Content) -> some View {
