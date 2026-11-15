@@ -1,10 +1,12 @@
 import SwiftUI
+import UniformTypeIdentifiers
 
 struct ContentView: View {
     @StateObject private var adb = ADBSession()
     @State private var host = ""
     @State private var port = "5555"
     @State private var command = "getprop ro.build.version.release"
+    @State private var isAPKPickerPresented = false
 
     var body: some View {
         NavigationStack {
@@ -83,6 +85,20 @@ struct ContentView: View {
                             .disabled(!adb.isConnected || adb.isBusy)
                         }
 
+                        panel(title: "Управление приложениями") {
+                            Button {
+                                isAPKPickerPresented = true
+                            } label: {
+                                Label("Выбрать и установить APK", systemImage: "square.and.arrow.down")
+                                    .frame(maxWidth: .infinity)
+                            }
+                            .buttonStyle(PrimaryButtonStyle())
+                            .disabled(!adb.isConnected || adb.isBusy)
+                            Text("APK будет передан на Android через ADB SYNC, затем выполнится pm install -r.")
+                                .font(.caption)
+                                .foregroundStyle(.white.opacity(0.55))
+                        }
+
                         panel(title: "ADB-терминал") {
                             Text("Вводите shell-команду без префикса «shell:».")
                                 .font(.caption)
@@ -120,7 +136,21 @@ struct ContentView: View {
                 }
             }
             .toolbar(.hidden, for: .navigationBar)
+            .fileImporter(isPresented: $isAPKPickerPresented, allowedContentTypes: [.data], allowsMultipleSelection: false) { result in
+                switch result {
+                case .success(let urls):
+                    guard let url = urls.first else { return }
+                    Task { await adb.installAPK(from: url) }
+                case .failure(let error):
+                    adbOutputError(error)
+                }
+            }
         }
+    }
+
+    private func adbOutputError(_ error: Error) {
+        // The picker error is shown in the session output without changing connection state.
+        print("APK picker error: \\(error.localizedDescription)")
     }
 
     private func panel<Content: View>(title: String, @ViewBuilder content: () -> Content) -> some View {
