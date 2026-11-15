@@ -4,7 +4,7 @@ struct ContentView: View {
     @StateObject private var adb = ADBSession()
     @State private var host = ""
     @State private var port = "5555"
-    @State private var command = "shell getprop ro.build.version.release"
+    @State private var command = "getprop ro.build.version.release"
 
     var body: some View {
         NavigationStack {
@@ -19,7 +19,7 @@ struct ContentView: View {
                                 .foregroundStyle(.cyan)
                             Text("Управление Android")
                                 .font(.system(size: 30, weight: .bold, design: .rounded))
-                            Text("Подключение и инструменты ADB по Wi-Fi")
+                            Text("ADB-команды по локальной сети")
                                 .font(.subheadline)
                                 .foregroundStyle(.white.opacity(0.6))
                         }
@@ -29,7 +29,7 @@ struct ContentView: View {
                                 .textInputAutocapitalization(.never)
                                 .keyboardType(.decimalPad)
                                 .fieldStyle()
-                            TextField("Порт", text: $port)
+                            TextField("Порт ADB", text: $port)
                                 .keyboardType(.numberPad)
                                 .fieldStyle()
                             Button {
@@ -39,15 +39,57 @@ struct ContentView: View {
                                     .frame(maxWidth: .infinity)
                             }
                             .buttonStyle(PrimaryButtonStyle())
-                            .disabled(host.isEmpty || adb.isBusy)
+                            .disabled(host.isEmpty || adb.isBusy || adb.isConnected)
+
+                            if adb.isConnected {
+                                Button {
+                                    adb.disconnect()
+                                } label: {
+                                    Label("Отключить", systemImage: "xmark.circle")
+                                        .frame(maxWidth: .infinity)
+                                }
+                                .buttonStyle(SecondaryButtonStyle())
+                                .disabled(adb.isBusy)
+                            }
+
                             Text(adb.status)
                                 .font(.footnote)
                                 .foregroundStyle(adb.isConnected ? .green : .white.opacity(0.65))
                         }
 
+                        panel(title: "Быстрые действия") {
+                            Button {
+                                Task { await adb.run(command: "getprop ro.product.manufacturer; getprop ro.product.model; getprop ro.build.version.release; getprop ro.build.version.sdk") }
+                            } label: {
+                                toolRow("Информация об устройстве", "info.circle", detail: "Производитель, модель и версия Android")
+                            }
+                            .buttonStyle(.plain)
+                            .disabled(!adb.isConnected || adb.isBusy)
+
+                            Button {
+                                Task { await adb.run(command: "pm list packages -3") }
+                            } label: {
+                                toolRow("Установленные приложения", "square.grid.2x2", detail: "Список пользовательских пакетов")
+                            }
+                            .buttonStyle(.plain)
+                            .disabled(!adb.isConnected || adb.isBusy)
+
+                            Button {
+                                Task { await adb.run(command: "pm list packages -s") }
+                            } label: {
+                                toolRow("Системные пакеты", "gearshape.2", detail: "Список системных пакетов")
+                            }
+                            .buttonStyle(.plain)
+                            .disabled(!adb.isConnected || adb.isBusy)
+                        }
+
                         panel(title: "ADB-терминал") {
-                            TextField("Команда ADB", text: $command, axis: .vertical)
+                            Text("Вводите shell-команду без префикса «shell:».")
+                                .font(.caption)
+                                .foregroundStyle(.white.opacity(0.55))
+                            TextField("Например: getprop ro.build.version.release", text: $command, axis: .vertical)
                                 .lineLimit(2...4)
+                                .textInputAutocapitalization(.never)
                                 .fieldStyle()
                             Button {
                                 Task { await adb.run(command: command) }
@@ -56,7 +98,7 @@ struct ContentView: View {
                                     .frame(maxWidth: .infinity)
                             }
                             .buttonStyle(PrimaryButtonStyle())
-                            .disabled(!adb.isConnected || adb.isBusy || command.isEmpty)
+                            .disabled(!adb.isConnected || adb.isBusy || command.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                             ScrollView {
                                 Text(adb.output.isEmpty ? "Вывод команд появится здесь." : adb.output)
                                     .font(.system(.caption, design: .monospaced))
@@ -65,16 +107,14 @@ struct ContentView: View {
                                     .textSelection(.enabled)
                                     .padding(12)
                             }
-                            .frame(minHeight: 100, maxHeight: 220)
+                            .frame(minHeight: 100, maxHeight: 260)
                             .background(.black.opacity(0.35), in: RoundedRectangle(cornerRadius: 12))
                         }
 
-                        panel(title: "Инструменты") {
-                            toolRow("Приложения", "square.grid.2x2", detail: "Список пакетов Android")
-                            toolRow("Установка APK", "arrow.down.app", detail: "Установка файлов APK")
-                            toolRow("Системные пакеты", "gearshape.2", detail: "Отключение и включение пакетов")
-                            toolRow("Информация", "info.circle", detail: "Модель, Android и состояние")
-                        }
+                        Text("Установка APK и управление состоянием пакетов пока не реализованы.")
+                            .font(.caption)
+                            .foregroundStyle(.white.opacity(0.45))
+                            .padding(.horizontal, 4)
                     }
                     .padding(20)
                 }
@@ -104,6 +144,7 @@ struct ContentView: View {
             Image(systemName: "chevron.right").font(.caption).foregroundStyle(.white.opacity(0.35))
         }
         .padding(.vertical, 5)
+        .contentShape(Rectangle())
     }
 }
 
@@ -122,5 +163,15 @@ private struct PrimaryButtonStyle: ButtonStyle {
             .padding(13)
             .background(Color.cyan.opacity(configuration.isPressed ? 0.55 : 0.9), in: RoundedRectangle(cornerRadius: 12))
             .foregroundStyle(Color.black)
+    }
+}
+
+private struct SecondaryButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(.subheadline.weight(.semibold))
+            .padding(13)
+            .background(Color.white.opacity(configuration.isPressed ? 0.12 : 0.07), in: RoundedRectangle(cornerRadius: 12))
+            .foregroundStyle(.white)
     }
 }
