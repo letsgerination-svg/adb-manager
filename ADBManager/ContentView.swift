@@ -184,7 +184,7 @@ struct ContentView: View {
                 }
                 Button("Отмена", role: .cancel) { pendingPackageAction = nil }
             } message: {
-                Text("Проверьте имя пакета: \\(packageName). Отключение системного пакета может нарушить работу Android.")
+                Text("Проверьте имя пакета: \(packageName). Отключение системного пакета может нарушить работу Android.")
             }
             .fileImporter(isPresented: $isAPKPickerPresented, allowedContentTypes: [.data], allowsMultipleSelection: false) { result in
                 switch result {
@@ -192,7 +192,7 @@ struct ContentView: View {
                     guard let url = urls.first else { return }
                     Task { await adb.installAPK(from: url) }
                 case .failure(let error):
-                    Task { await adb.reportError("Не удалось открыть APK: \\(error.localizedDescription)") }
+                    Task { await adb.reportError("Не удалось открыть APK: \(error.localizedDescription)") }
                 }
             }
         }
