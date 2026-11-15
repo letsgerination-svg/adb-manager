@@ -79,7 +79,8 @@ final class ADBSession: ObservableObject {
                 default:
                     throw ADBSessionError.unexpectedPacket(response.command)
                 }
-            }        } catch {
+            }
+        } catch {
             status = "Ошибка ADB: \(error.localizedDescription)"
             isConnected = false
             candidate.cancel()
